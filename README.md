@@ -88,9 +88,27 @@ The three A/B calls are mocked locally until these env vars are set on the
 | `STRIPE_SECRET_KEY`       | —        | `sk_test_...` turns billing into real Stripe test charges |
 
 Contracts the mocks satisfy (so real services must match):
-- classify: `POST {config}` -> `{ nodes, edges, guards }`
-- scan: `POST { graph }` -> `{ summary, vulnerablePaths, recommendedFix }`
-- explain: `POST { path, severity, graph }` -> `{ explanation }`
+- classify: `POST <config>` -> `{ nodes, edges, guards }` (bare Graph; `{graph:{…}}` also accepted)
+- scan (Person A): `POST <graph>` -> `{ summary, vulnerablePaths, recommendedFix }`
+  **Body is the BARE Graph `{nodes,edges,guards}`, no wrapper** — matches Person A's
+  frozen /scan spec. Response may be bare Results or `{results:{…}}`; both accepted.
+- explain (Person B): `POST { path, severity, graph }` -> `{ explanation }`.
+  A second, optional call `POST { recommendedFix, graph }` -> `{ rationale }` enriches
+  the fix text; it is wrapped in try/catch, so if Person B ignores it the templated
+  rationale simply stands (non-fatal).
+
+`apply-fix` uses the identical env-aware pipeline, so it also swaps to the real
+services when the env vars are set. When called with a `scanId`, its "before"
+count is read from the stored scan result (what the user actually saw), so
+before/after can never diverge from the original scan.
+
+### Coordination notes
+
+- **Person D (frontend):** the 402 paywall response exposes `upgradeRequired`,
+  `used`, `freeLimit`, `plan` **both** at top level and nested under `error`.
+  Read either. Every response (success and error) carries a `runId`.
+- **Free-scan count is per-user** (`count(*) ... WHERE kind='scan' AND user_id=$1`).
+  A fresh signup always gets its 1 free scan.
 
 ## Source
 
