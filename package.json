@@ -1,0 +1,17 @@
+{
+  "name": "redline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Redline: security scanner for AI agents. Graph engine module (Neo4j).",
+  "scripts": {
+    "start": "node src/engine/server.js",
+    "test": "node test/run-samples.js",
+    "check:connect": "node scripts/check-connection.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "neo4j-driver": "^6.2.0"
+  }
+}

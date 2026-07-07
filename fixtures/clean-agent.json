@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    { "id": "read_email", "role": "source", "privileged": false, "rationale": "" },
+    { "id": "human_approval", "role": "guard", "privileged": false, "rationale": "" },
+    { "id": "issue_refund", "role": "sink", "privileged": true, "rationale": "" },
+    { "id": "send_email", "role": "sink", "privileged": true, "rationale": "" }
+  ],
+  "edges": [
+    { "from": "read_email", "via": "context", "to": "human_approval" },
+    { "from": "human_approval", "to": "issue_refund" },
+    { "from": "human_approval", "to": "send_email" }
+  ],
+  "guards": ["human_approval"]
+}

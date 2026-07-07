@@ -1,0 +1,16 @@
+{
+  "nodes": [
+    { "id": "read_email", "role": "source", "privileged": false, "rationale": "" },
+    { "id": "fetch_url", "role": "source", "privileged": false, "rationale": "" },
+    { "id": "search_orders", "role": "passthrough", "privileged": false, "rationale": "" },
+    { "id": "issue_refund", "role": "sink", "privileged": true, "rationale": "" },
+    { "id": "send_email", "role": "sink", "privileged": true, "rationale": "" }
+  ],
+  "edges": [
+    { "from": "read_email", "via": "context", "to": "issue_refund" },
+    { "from": "read_email", "via": "context", "to": "send_email" },
+    { "from": "fetch_url", "via": "context", "to": "issue_refund" },
+    { "from": "fetch_url", "via": "context", "to": "send_email" }
+  ],
+  "guards": []
+}
