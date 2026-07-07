@@ -148,9 +148,24 @@ export function ensureSession(): Promise<string> {
   return sessionPromise;
 }
 
-async function authedPost(fnPath: string, body: any): Promise<any> {
+// Drop the stored token so the next ensureSession() signs up a fresh demo user.
+// Called when the backend rejects our token as unauthenticated (expired JWT).
+function invalidateSession(): void {
+  cachedToken = null;
+  sessionPromise = null;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(EMAIL_KEY);
+}
+
+async function authedPost(fnPath: string, body: any, retryOn401 = true): Promise<any> {
   const token = await ensureSession();
   const { r, data } = await postJson(`${API}/fn/${fnPath}`, body, token);
+  // A stale/expired demo JWT reads as anonymous to the backend. Reset the
+  // session once and retry so the user never has to clear localStorage by hand.
+  if (r.status === 401 && retryOn401) {
+    invalidateSession();
+    return authedPost(fnPath, body, false);
+  }
   if (r.status === 402) {
     const msg = data?.error?.message || data?.message || 'Free scan limit reached';
     throw new PaywallError(msg, data?.used, data?.freeLimit);
@@ -176,11 +191,15 @@ export async function billingUnlock(): Promise<void> {
   await authedPost('billing', { action: 'confirm' });
 }
 
-export async function getHistory(): Promise<ScanRow[]> {
+export async function getHistory(retryOn401 = true): Promise<ScanRow[]> {
   const token = await ensureSession();
   const r = await timedFetch(`${API}/scans?order=created_at.desc`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+  if (r.status === 401 && retryOn401) {
+    invalidateSession();
+    return getHistory(false);
+  }
   if (!r.ok) return [];
   const data = await r.json();
   return Array.isArray(data) ? data : (data.rows ?? data.data ?? []);
