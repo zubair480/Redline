@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import { scan, ValidationError } from './scan.js'
 import { getDriver } from './db.js'
+import { classify, explainPath, explainFix } from './rocketride.js'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -26,6 +27,37 @@ app.post('/scan', async (req, res) => {
       return res.status(400).json({ error: err.message })
     }
     console.error('[scan:error]', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// RocketRide stage (spec 07): Config -> Graph. LLM-backed with a heuristic
+// fallback, so this always returns a valid Graph.
+app.post('/classify', async (req, res) => {
+  try {
+    const config = req.body || {}
+    if (!Array.isArray(config.tools) || config.tools.length === 0) {
+      return res.status(400).json({ error: "Config must include a non-empty 'tools' array." })
+    }
+    res.json(await classify(config))
+  } catch (err) {
+    console.error('[classify:error]', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// RocketRide stage (spec 07): one URL, two request forms. { path, severity,
+// graph } explains a vulnerable path; { recommendedFix, graph } justifies the fix.
+app.post('/explain', async (req, res) => {
+  try {
+    const body = req.body || {}
+    if (body.recommendedFix) return res.json(await explainFix(body))
+    if (!Array.isArray(body.path) || body.path.length === 0) {
+      return res.status(400).json({ error: "Body must include 'path' (array) or 'recommendedFix'." })
+    }
+    res.json(await explainPath(body))
+  } catch (err) {
+    console.error('[explain:error]', err)
     res.status(500).json({ error: err.message })
   }
 })

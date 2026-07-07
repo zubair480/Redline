@@ -80,7 +80,10 @@ function randId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-const REQUEST_TIMEOUT_MS = 20000;
+// The scan runs the LLM classify + per-path explain stages sequentially, so a
+// cold scan (uncached config) can take ~20s. Generous ceiling so it never
+// aborts mid-analysis; cached configs return in well under a second.
+const REQUEST_TIMEOUT_MS = 45000;
 
 // fetch with an abort-based timeout so a stalled request never hangs the UI.
 async function timedFetch(url: string, init: RequestInit): Promise<Response> {
