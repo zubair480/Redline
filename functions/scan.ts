@@ -94,15 +94,17 @@ async function runScan(graph, config, env, log) {
   const url = env.SCAN_URL;
   if (url) {
     log("scan:real", { url });
-    // Person A's frozen /scan takes the BARE Graph shape ({nodes,edges,guards}) — no wrapper.
+    // Agreed contract (Person A + Person C specs): the orchestrator sends the
+    // WRAPPED form { graph } and expects a bare Results back. Person A's /scan
+    // also accepts a bare Graph, but { graph } is the documented contract.
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(graph),
+      body: JSON.stringify({ graph }),
     });
     if (!r.ok) throw new Error(`scan(graph) ${r.status}: ${await r.text()}`);
     const j = await r.json();
-    return j.results ?? j; // accept { results: {...} } or a bare Results
+    return j.results ?? j; // bare Results expected; tolerate { results: {...} } too
   }
   log("scan:mock");
   const nodes = graph.nodes || [];

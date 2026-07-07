@@ -89,9 +89,10 @@ The three A/B calls are mocked locally until these env vars are set on the
 
 Contracts the mocks satisfy (so real services must match):
 - classify: `POST <config>` -> `{ nodes, edges, guards }` (bare Graph; `{graph:{…}}` also accepted)
-- scan (Person A): `POST <graph>` -> `{ summary, vulnerablePaths, recommendedFix }`
-  **Body is the BARE Graph `{nodes,edges,guards}`, no wrapper** — matches Person A's
-  frozen /scan spec. Response may be bare Results or `{results:{…}}`; both accepted.
+- scan (Person A): `POST { graph }` -> `{ summary, vulnerablePaths, recommendedFix }`
+  **Body is the WRAPPED form `{ graph }`** — the agreed Person A + Person C contract
+  (Person A's /scan also accepts a bare Graph, but wrapped is documented). Response
+  is bare Results; `{results:{…}}` is also tolerated defensively.
 - explain (Person B): `POST { path, severity, graph }` -> `{ explanation }`.
   A second, optional call `POST { recommendedFix, graph }` -> `{ rationale }` enriches
   the fix text; it is wrapped in try/catch, so if Person B ignores it the templated

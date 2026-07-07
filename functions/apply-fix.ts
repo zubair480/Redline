@@ -90,7 +90,8 @@ async function runScan(graph, config, env, log) {
   const url = env.SCAN_URL;
   if (url) {
     log("scan:real", { url });
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(graph) });
+    // Wrapped { graph } per the agreed Person A + Person C contract; bare Results back.
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ graph }) });
     if (!r.ok) throw new Error(`scan(graph) ${r.status}: ${await r.text()}`);
     const j = await r.json();
     return j.results ?? j;
