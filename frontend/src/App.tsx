@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Shield, 
   Terminal as TerminalIcon, 
@@ -24,111 +24,38 @@ import {
   Clock,
   HelpCircle
 } from 'lucide-react';
-import { AppStep, ScanNode } from './types';
-import { 
-  DEFAULT_AGENT_CONFIG, 
-  SCAN_LOGS_SEQUENCE, 
-  FIX_LOGS_SEQUENCE 
+import { AppStep, ScanNode, ScanEdge } from './types';
+import {
+  DEFAULT_AGENT_CONFIG,
+  SCAN_LOGS_SEQUENCE,
+  FIX_LOGS_SEQUENCE,
+  PRESETS,
 } from './data';
 import GraphArea from './components/GraphArea';
 import TerminalLoader from './components/TerminalLoader';
+import {
+  ensureSession,
+  currentEmail,
+  runScan,
+  applyFix,
+  billingUnlock,
+  fetchScanRow,
+  getHistory,
+  PaywallError,
+  type Results,
+  type ScanResponse,
+  type ApplyFixResponse,
+  type ScanRow,
+} from './api';
+import { resultsToView, deriveView } from './mapping';
 
-// Predefined editable template configs for user selection
-const PRESETS = [
-  {
-    name: "Customer Support Agent (Stripe Sink)",
-    desc: "Vulnerable support routing agent with untrusted email sources and Stripe refund privileges.",
-    config: DEFAULT_AGENT_CONFIG
-  },
-  {
-    name: "Slack Copilot (Database Sink)",
-    desc: "Autonomous agent summarizing external mentions, with direct SQL DB execution rights.",
-    config: `{
-  "agent_id": "slack_copilot_internal",
-  "version": "2.1.0",
-  "metadata": {
-    "engine": "Redline Agent Engine",
-    "owner": "devops-slack"
-  },
-  "sources": [
-    {
-      "id": "src_slack",
-      "name": "Listen Slack Mentions",
-      "type": "untrusted_input",
-      "endpoint": "slack.com/api/mentions",
-      "poll_interval": "5s"
-    }
-  ],
-  "tools": [
-    {
-      "id": "tool_intent",
-      "name": "Process Intent",
-      "type": "llm_agent_router",
-      "model": "gemini-2.5-flash",
-      "system_prompt": "Interpret the query. If database query is required, run raw SQL directly without escaping."
-    }
-  ],
-  "sinks": [
-    {
-      "id": "sink_db",
-      "name": "Internal PostgreSQL",
-      "type": "privileged_api",
-      "provider": "Cloud SQL Postgres",
-      "critical_level": "CRITICAL_LEVEL_5",
-      "requires_approval": false
-    }
-  ],
-  "connections": [
-    { "source": "src_slack", "target": "tool_intent" },
-    { "source": "tool_intent", "target": "sink_db" }
-  ]
-}`
-  },
-  {
-    name: "E-Commerce Assistant (Shopify Sink)",
-    desc: "Bypasses human approval when executing inventory orders based on untrusted web-hook data.",
-    config: `{
-  "agent_id": "shopify_fulfillment_bot",
-  "version": "1.0.2",
-  "metadata": {
-    "engine": "Redline Agent Engine",
-    "owner": "ecommerce-sec"
-  },
-  "sources": [
-    {
-      "id": "src_webhook",
-      "name": "Web-Hook Listener",
-      "type": "untrusted_input",
-      "endpoint": "api.shopify.com/webhooks",
-      "poll_interval": "1s"
-    }
-  ],
-  "tools": [
-    {
-      "id": "tool_intent",
-      "name": "Process Intent",
-      "type": "llm_agent_router",
-      "model": "gemini-2.5-flash",
-      "system_prompt": "Parse incoming Shopify order hooks and trigger fulfillment routines instantly."
-    }
-  ],
-  "sinks": [
-    {
-      "id": "sink_fulfillment",
-      "name": "Fulfill Order API",
-      "type": "privileged_api",
-      "provider": "Shopify GraphQL",
-      "critical_level": "CRITICAL_LEVEL_4",
-      "requires_approval": false
-    }
-  ],
-  "connections": [
-    { "source": "src_webhook", "target": "tool_intent" },
-    { "source": "tool_intent", "target": "sink_fulfillment" }
-  ]
-}`
-  }
-];
+interface ViewData {
+  results: Results;
+  nodes: ScanNode[];
+  edges: ScanEdge[];
+  guardAdded?: { guard: string; placement: string | null };
+  before?: number;
+}
 
 export default function App() {
   // Navigation & Simulation State
@@ -157,23 +84,34 @@ export default function App() {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
 
-  // Scan History Logger
-  const [scans, setScans] = useState<Array<{ id: string; date: string; status: string; agent: string; issue: string }>>([
-    {
-      id: "scan_802",
-      date: "2026-07-07 10:20 AM",
-      status: "SECURED",
-      agent: "slack_copilot_internal",
-      issue: "No critical exposures active"
-    },
-    {
-      id: "scan_791",
-      date: "2026-07-06 04:15 PM",
-      status: "THREAT_FOUND",
-      agent: "agent_customer_support_v2",
-      issue: "CVE-AGENT-2026-9041 (Prompt Bypass)"
-    }
-  ]);
+  // Live scan results from the backend pipeline.
+  const [scanId, setScanId] = useState<string | null>(null);
+  const [vulnView, setVulnView] = useState<ViewData | null>(null);
+  const [resolvedView, setResolvedView] = useState<ViewData | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  // Real scan history (RLS-scoped to the demo user).
+  const [history, setHistory] = useState<ScanRow[]>([]);
+
+  // Demo session identity.
+  const [userEmail, setUserEmail] = useState('');
+
+  // In-flight request promises, awaited when the terminal animation finishes.
+  const scanPromise = useRef<Promise<ScanResponse> | null>(null);
+  const fixPromise = useRef<Promise<ApplyFixResponse> | null>(null);
+  const lastConfig = useRef<any>(null);
+
+  // Establish a silent demo session on load.
+  useEffect(() => {
+    ensureSession()
+      .then(() => setUserEmail(currentEmail()))
+      .catch(() => setScanError('Could not connect to the Redline backend.'));
+  }, []);
+
+  const refreshHistory = () => {
+    getHistory().then(setHistory).catch(() => {});
+  };
+  useEffect(() => { refreshHistory(); }, []);
 
   // JSON Syntax Validation Helper
   const handleEditorChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -192,91 +130,148 @@ export default function App() {
     setJsonError(null);
   };
 
+  // Kick off the real scan and enter the terminal animation. The request runs
+  // concurrently; handleScanFinished awaits it when the terminal completes.
+  const startScan = (config: any) => {
+    lastConfig.current = config;
+    setScanError(null);
+    scanPromise.current = runScan(config);
+    // The real handling happens in handleScanFinished; this no-op handler just
+    // keeps a fast rejection (e.g. 402) from logging as an unhandled rejection
+    // while the terminal animation is still playing.
+    scanPromise.current.catch(() => {});
+    setStep('loading_scan');
+  };
+
   const handleRunScan = () => {
     if (activeInputTab === 'paste') {
+      let config: any;
       try {
-        JSON.parse(editorContent);
+        config = JSON.parse(editorContent);
         setJsonError(null);
-        setStep('loading_scan');
       } catch (err: any) {
         setJsonError(`Invalid JSON config! Please resolve errors before scanning. (${err.message})`);
+        return;
       }
+      startScan(config);
     } else if (activeInputTab === 'github') {
+      // GitHub tab is a visual mock: verify, then scan the default config.
+      const scanDefault = () => startScan(JSON.parse(DEFAULT_AGENT_CONFIG));
       if (gitStatus !== 'found') {
-        setGitError('Please specify and connect a repository first.');
-        // Auto check for user convenience
         setGitStatus('checking');
         setTimeout(() => {
           setGitStatus('found');
           setGitError(null);
-          setStep('loading_scan');
+          scanDefault();
         }, 1200);
         return;
       }
       setGitError(null);
-      setStep('loading_scan');
+      scanDefault();
     } else {
-      // CLI instructions tab scan simulation
-      setStep('loading_scan');
+      // CLI tab is a visual mock: scan the default config.
+      startScan(JSON.parse(DEFAULT_AGENT_CONFIG));
     }
   };
 
-  const handleScanFinished = () => {
-    setStep('vulnerable');
+  const handleScanFinished = async () => {
+    try {
+      const resp = await scanPromise.current!;
+      const row = await fetchScanRow(resp.scanId);
+      const view = row?.graph ? resultsToView(row.graph, resp) : deriveView(lastConfig.current, resp);
+      setScanId(resp.scanId);
+      setVulnView({ results: resp, nodes: view.nodes, edges: view.edges });
+      setSelectedNode(null);
+      setStep('vulnerable');
+      refreshHistory();
+    } catch (err: any) {
+      if (err instanceof PaywallError) {
+        setStep('config');
+        setIsPaywallOpen(true);
+      } else {
+        setScanError(err?.message || 'Scan failed.');
+        setStep('config');
+      }
+    }
   };
 
   const handleApplyFix = () => {
+    if (!scanId) return;
+    fixPromise.current = applyFix(scanId);
+    fixPromise.current.catch(() => {}); // handled in handleFixFinished
     setStep('loading_fix');
   };
 
-  const handleFixFinished = () => {
-    setStep('resolved');
-
-    // Save record to scan history
+  const handleFixFinished = async () => {
     try {
-      const parsed = JSON.parse(editorContent);
-      const agentId = parsed.agent_id || "unnamed_agent";
-      setScans(prev => [
-        {
-          id: `scan_${Math.floor(Math.random() * 900) + 100}`,
-          date: new Date().toLocaleString(),
-          status: "SECURED",
-          agent: agentId,
-          issue: "No critical exposures active"
-        },
-        ...prev
-      ]);
-    } catch (e) {
-      // fallback
+      const resp = await fixPromise.current!;
+      const row = await fetchScanRow(resp.scanId);
+      const view = row?.graph
+        ? resultsToView(row.graph, resp.after)
+        : deriveView(resp.config, resp.after);
+      setResolvedView({
+        results: resp.after,
+        nodes: view.nodes,
+        edges: view.edges,
+        guardAdded: resp.guardAdded,
+        before: resp.before.vulnerablePaths,
+      });
+      setSelectedNode(null);
+      setStep('resolved');
+      refreshHistory();
+    } catch (err: any) {
+      setScanError(err?.message || 'Apply fix failed.');
+      setStep('vulnerable');
     }
   };
 
-  // Simulated stripe credit card processing
-  const handleProcessUpgrade = (e: React.FormEvent) => {
+  // Real mock-mode billing unlock (checkout -> confirm), behind the card form.
+  const handleProcessUpgrade = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cardNumber || !cardExpiry || !cardCvv || !cardName) {
       alert("Please fill in all credit card details.");
       return;
     }
     setIsProcessingPayment(true);
-    setTimeout(() => {
-      setIsProcessingPayment(false);
-      setPaymentSuccess(true);
-      setIsPro(true);
-      
-      // Update scan list to reflect premium logs
-      setScans(prev => [
-        {
-          id: "scan_pro_999",
-          date: "Just now",
-          status: "PRO_ACTIVE",
-          agent: "Global Sandbox Guard",
-          issue: "Continuous verification active"
-        },
-        ...prev
-      ]);
-    }, 2000);
+    try {
+      await billingUnlock();
+    } catch {
+      // Mock billing rarely fails; grant the UX regardless for the demo.
+    }
+    setIsProcessingPayment(false);
+    setPaymentSuccess(true);
+    setIsPro(true);
+    refreshHistory();
   };
+
+  // After unlock, close the modal and auto-retry the scan that hit the paywall.
+  const handleReturnFromUpgrade = () => {
+    setPaymentSuccess(false);
+    setIsPaywallOpen(false);
+    if (lastConfig.current) startScan(lastConfig.current);
+  };
+
+  // Derived view data for the vulnerable/resolved panel.
+  const activeView = step === 'resolved' ? resolvedView : vulnView;
+  const activeResults = activeView?.results ?? null;
+  const activeNodes = activeView?.nodes ?? [];
+  const activeEdges = activeView?.edges ?? [];
+  const vulnCount = activeResults?.summary.vulnerablePaths ?? 0;
+  const topSeverity = (activeResults?.vulnerablePaths?.[0]?.severity ?? 'critical').toUpperCase();
+  const recFix = activeResults?.recommendedFix ?? null;
+  const selectedExplanation = (() => {
+    const paths = activeResults?.vulnerablePaths ?? [];
+    if (selectedNode) {
+      const hit = paths.find((p) => p.path.includes(selectedNode.id));
+      if (hit) return hit.explanation;
+    }
+    return paths[0]?.explanation ?? '';
+  })();
+  const resolvedBefore = resolvedView?.before ?? 0;
+  const resolvedRemaining = resolvedView?.results.summary.vulnerablePaths ?? 0;
+  const resolvedEliminated = Math.max(0, resolvedBefore - resolvedRemaining);
+  const guardAdded = resolvedView?.guardAdded;
+  const fullySecured = step === 'resolved' && resolvedRemaining === 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-300 flex flex-col font-sans selection:bg-red-500/30 selection:text-red-200">
@@ -340,24 +335,31 @@ export default function App() {
                     </button>
                   </div>
                   <div className="max-h-72 overflow-y-auto divide-y divide-slate-900">
-                    {scans.map((scan) => (
-                      <div key={scan.id} className="p-3.5 hover:bg-slate-900/40 transition-colors">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px] font-mono text-slate-500">{scan.date}</span>
-                          <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold ${
-                            scan.status === 'SECURED' 
-                              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-900/50' 
-                              : scan.status === 'PRO_ACTIVE'
-                                ? 'bg-indigo-950/60 text-indigo-400 border border-indigo-900/50'
+                    {history.length === 0 && (
+                      <div className="p-3.5 text-[10px] font-mono text-slate-500">No scans yet. Run a scan to populate history.</div>
+                    )}
+                    {history.map((row) => {
+                      const paths = row.results?.summary?.vulnerablePaths ?? 0;
+                      const secured = paths === 0;
+                      const status = secured ? 'SECURED' : 'THREAT_FOUND';
+                      const date = row.created_at ? new Date(row.created_at).toLocaleString() : '';
+                      return (
+                        <div key={row.id} className="p-3.5 hover:bg-slate-900/40 transition-colors">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-mono text-slate-500">{date}</span>
+                            <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold ${
+                              secured
+                                ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-900/50'
                                 : 'bg-red-950/60 text-red-400 border border-red-900/50'
-                          }`}>
-                            {scan.status}
-                          </span>
+                            }`}>
+                              {status}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-semibold text-slate-200 truncate">{row.agent_name || 'agent'}{row.kind === 'applyfix' ? ' (fix)' : ''}</h4>
+                          <p className="text-[10px] text-slate-400 mt-0.5">{secured ? 'No unguarded paths' : `${paths} unguarded path(s)`}</p>
                         </div>
-                        <h4 className="text-xs font-semibold text-slate-200 truncate">{scan.agent}</h4>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{scan.issue}</p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div className="bg-slate-900/50 px-4 py-2.5 border-t border-slate-800 text-center">
                     <button 
@@ -393,15 +395,15 @@ export default function App() {
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">
                 <div className="w-full h-full bg-gradient-to-br from-red-600/30 to-indigo-600/30 flex items-center justify-center font-bold text-xs text-slate-200">
-                  SS
+                  {(userEmail || 'RD').slice(0, 2).toUpperCase()}
                 </div>
               </div>
               <div className="hidden md:block">
-                <span className="block text-xs text-slate-300 font-semibold truncate max-w-[120px]">
-                  Serafim Sharkov
+                <span className="block text-xs text-slate-300 font-semibold truncate max-w-[140px]">
+                  Demo Session
                 </span>
-                <span className="block text-[9px] text-slate-500 font-mono">
-                  Serafim.Sharkov@gmail.com
+                <span className="block text-[9px] text-slate-500 font-mono truncate max-w-[140px]">
+                  {userEmail || 'connecting...'}
                 </span>
               </div>
             </div>
@@ -812,6 +814,12 @@ export default function App() {
                   <span className="font-mono">{jsonError}</span>
                 </div>
               )}
+              {scanError && !jsonError && (
+                <div className="bg-red-950/50 border-t border-red-900 px-6 py-3 text-xs text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span className="font-mono">Backend error: {scanError}</span>
+                </div>
+              )}
 
               {/* Call to Action Button */}
               <div className="bg-slate-900 px-6 py-4 flex items-center justify-between border-t border-slate-800">
@@ -861,10 +869,12 @@ export default function App() {
               
               {/* Graph Panel (70%) */}
               <div className="lg:col-span-8 flex flex-col">
-                <GraphArea 
-                  step={step} 
-                  selectedNodeId={selectedNode?.id || ''} 
-                  onSelectNode={(node) => setSelectedNode(node)} 
+                <GraphArea
+                  step={step}
+                  nodes={activeNodes}
+                  edges={activeEdges}
+                  selectedNodeId={selectedNode?.id || ''}
+                  onSelectNode={(node) => setSelectedNode(node)}
                 />
               </div>
 
@@ -880,18 +890,26 @@ export default function App() {
                       <div className="p-3 bg-red-950/40 border border-red-900/60 rounded-xl">
                         <div className="flex items-center gap-2 text-red-500 mb-1.5">
                           <AlertTriangle className="w-5 h-5 shrink-0 animate-bounce" />
-                          <h3 className="font-display font-black text-sm tracking-wide uppercase">Critical Vulnerability Found</h3>
+                          <h3 className="font-display font-black text-sm tracking-wide uppercase">
+                            {vulnCount} Vulnerable Path{vulnCount === 1 ? '' : 's'} Found
+                          </h3>
                         </div>
-                        <p className="text-[11px] font-mono text-red-400">SIGNATURE: CVE-AGENT-2026-9041</p>
+                        <p className="text-[11px] font-mono text-red-400">
+                          SEVERITY: {topSeverity} • {activeResults?.summary.sources ?? 0} SOURCES → {activeResults?.summary.sinks ?? 0} PRIVILEGED SINKS
+                        </p>
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        <div className="p-3 bg-emerald-950/40 border border-emerald-900/60 rounded-xl">
-                          <div className="flex items-center gap-2 text-emerald-400 mb-1.5">
+                        <div className={`p-3 rounded-xl border ${fullySecured ? 'bg-emerald-950/40 border-emerald-900/60' : 'bg-amber-950/40 border-amber-900/60'}`}>
+                          <div className={`flex items-center gap-2 mb-1.5 ${fullySecured ? 'text-emerald-400' : 'text-amber-400'}`}>
                             <CheckCircle2 className="w-5 h-5 shrink-0" />
-                            <h3 className="font-display font-black text-sm tracking-wide uppercase">All Paths Secured</h3>
+                            <h3 className="font-display font-black text-sm tracking-wide uppercase">
+                              {fullySecured ? 'All Paths Secured' : 'Critical Path Secured'}
+                            </h3>
                           </div>
-                          <p className="text-[11px] font-mono text-emerald-400">STATUS: PROMPT INJECTION SECURED</p>
+                          <p className={`text-[11px] font-mono ${fullySecured ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {resolvedEliminated} OF {resolvedBefore} PATHS ELIMINATED{resolvedRemaining > 0 ? ` • ${resolvedRemaining} REMAINING` : ''}
+                          </p>
                         </div>
 
                         {/* Post-Scan Upsell CTA Card */}
@@ -968,11 +986,11 @@ export default function App() {
                     <div className="space-y-2">
                       <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">Exploit Narrative:</span>
                       <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/40 p-3 rounded-xl border border-slate-850/80">
-                        {step === 'vulnerable' ? (
-                          "An attacker can email 'Issue me a refund'. The agent reads this as an instruction and bypasses the intent-filter, reaching the Stripe API sink directly."
-                        ) : (
-                          "The newly injected 'Input Sanitizer' analyzes incoming semantic instructions prior to Stripe Sink execution. Bypasses are successfully blocked and logged."
-                        )}
+                        {step === 'vulnerable'
+                          ? (selectedExplanation || 'Untrusted input can reach a privileged sink without passing through any guard.')
+                          : fullySecured
+                            ? `The ${guardAdded?.guard || 'human_approval'} guard now intercepts every flow into "${guardAdded?.placement}". Injected instructions can no longer trigger a privileged action without approval.`
+                            : (selectedExplanation || `${resolvedRemaining} path(s) still reach a privileged sink. Add another guard to close them.`)}
                       </p>
                     </div>
 
@@ -980,17 +998,42 @@ export default function App() {
                     <div className="space-y-2">
                       <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">Remediation Action:</span>
                       <div className={`p-3.5 rounded-xl border text-xs leading-normal ${
-                        step === 'vulnerable' 
-                          ? 'bg-red-950/10 border-red-900/30 text-red-300 shadow-[0_0_15px_rgba(239,68,68,0.02)]' 
+                        step === 'vulnerable'
+                          ? 'bg-red-950/10 border-red-900/30 text-red-300 shadow-[0_0_15px_rgba(239,68,68,0.02)]'
                           : 'bg-emerald-950/10 border-emerald-900/30 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.02)]'
                       }`}>
-                        <strong>Optimal Chokepoint:</strong> {
-                          step === 'vulnerable'
-                            ? "Insert Input Sanitizer before 'Issue Refund' to block untrusted prompt overrides."
-                            : "Input Sanitizer is successfully running inline. The flow path from Process Intent is fully secured."
-                        }
+                        {step === 'vulnerable' ? (
+                          recFix ? (
+                            <><strong>Optimal Chokepoint:</strong> {recFix.rationale || `Place a ${recFix.guard} guard at "${recFix.placement}" to eliminate ${recFix.pathsEliminated} of ${recFix.pathsTotal} vulnerable paths.`}</>
+                          ) : (
+                            <><strong>No fix needed:</strong> no unguarded path reaches a privileged sink.</>
+                          )
+                        ) : (
+                          <><strong>Guard deployed:</strong> {guardAdded?.guard || 'human_approval'} at "{guardAdded?.placement}". {resolvedEliminated} of {resolvedBefore} paths eliminated{resolvedRemaining > 0 ? `, ${resolvedRemaining} remaining` : ''}.</>
+                        )}
                       </div>
                     </div>
+
+                    {/* Vulnerable path list */}
+                    {step === 'vulnerable' && (activeResults?.vulnerablePaths?.length ?? 0) > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">Vulnerable Paths ({vulnCount}):</span>
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto scrollbar-thin">
+                          {activeResults!.vulnerablePaths.map((p) => (
+                            <div key={p.id} className="bg-slate-950/60 border border-slate-850/80 rounded-lg px-2.5 py-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-slate-300 truncate">{p.path.join(' → ')}</span>
+                                <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+                                  p.severity === 'critical' ? 'bg-red-950 text-red-400 border border-red-900/40' : 'bg-amber-950 text-amber-400 border border-amber-900/40'
+                                }`}>
+                                  {p.severity.toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                   </div>
 
@@ -1130,7 +1173,7 @@ export default function App() {
                   <div>
                     <h3 className="font-display font-bold text-slate-100 text-lg">Payment Successful!</h3>
                     <p className="text-xs text-slate-400 mt-1">
-                      Welcome to Redline Pro, <strong className="text-slate-300">Serafim</strong>! Your account has been upgraded to lifetime unlimited scan privileges.
+                      Welcome to Redline Pro! Your account has been upgraded to unlimited scan privileges.
                     </p>
                   </div>
 
@@ -1150,13 +1193,10 @@ export default function App() {
                   </div>
 
                   <button
-                    onClick={() => {
-                      setPaymentSuccess(false);
-                      setIsPaywallOpen(false);
-                    }}
+                    onClick={handleReturnFromUpgrade}
                     className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs font-mono uppercase tracking-wider rounded-xl transition-all cursor-pointer"
                   >
-                    Return to Secured Graph
+                    Run Scan (Pro Unlocked)
                   </button>
                 </div>
               ) : (
