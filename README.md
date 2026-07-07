@@ -5,8 +5,9 @@ Security scanner for AI agents. Finds prompt-injection paths from a **source**
 through no **guard**. Modeled as a graph; we enumerate the unguarded paths.
 
 Owner: Butterbase backend + orchestration (where Person A / Neo4j and Person B /
-RocketRide meet). Everything below is **live now** with mocked A/B calls, so
-Person D (frontend) is unblocked immediately.
+RocketRide meet). Everything below is **live now**, and the React frontend in
+`frontend/` is wired straight to these endpoints — paste a config, run a scan,
+apply a fix, and watch the real Neo4j graph render (see **Frontend** below).
 
 ## App
 
@@ -111,7 +112,34 @@ before/after can never diverge from the original scan.
 - **Free-scan count is per-user** (`count(*) ... WHERE kind='scan' AND user_id=$1`).
   A fresh signup always gets its 1 free scan.
 
+## Frontend (`frontend/`)
+
+React 19 + Vite + Tailwind. The AI Studio visuals are kept intact but every
+number, path, and graph node is now real data from the endpoints above.
+
+```
+cd frontend && npm install && npm run dev   # http://localhost:5173
+```
+
+- **Silent demo auth.** On load it signs up a throwaway `demo-<rand>@redline.test`
+  user and stores the token in `localStorage` (`redline_token` / `redline_email`).
+  No login screen; a header chip shows the active demo identity.
+- **Self-healing session.** If the stored JWT has expired, the backend replies
+  `401 AUTH_REQUIRED`. The client (`src/api.ts`) transparently drops the dead
+  token, signs up a fresh demo user, and retries once — so a long-open tab never
+  gets stuck on the auth wall. Manual reset if ever needed: `localStorage.clear()`
+  then refresh.
+- **Data-driven graph.** `src/mapping.ts` turns the stored Graph + Results into
+  the node/edge view (synthesizing the shared-context node and rewiring guard
+  nodes the way Person A's engine does); `src/components/GraphArea.tsx` computes
+  the layout from that data.
+- **Flow:** paste/pick a config → Run Scan (`/fn/scan`) → Apply Fix
+  (`/fn/apply-fix`, 4→2 with the guard node shown) → paywall on 402 drives the
+  mock billing unlock → Scan History reads the RLS-scoped `GET /scans`.
+
 ## Source
 
 `functions/scan.ts`, `functions/apply-fix.ts`, `functions/billing.ts` — the
 deployed JS is inlined at deploy time; these files are the source of truth.
+Frontend integration lives in `frontend/src/{api,mapping}.ts`, `App.tsx`, and
+`components/GraphArea.tsx`.
