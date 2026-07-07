@@ -1,0 +1,6 @@
+{
+  "name": "Redline",
+  "description": "An interactive prompt injection and vulnerability scanner for AI agents, mapping tools and privileged sinks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
