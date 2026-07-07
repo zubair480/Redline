@@ -135,19 +135,38 @@ async function runScan(graph, config, env, log) {
 
 async function explain(results, graph, config, env, log) {
   const url = env.ROCKETRIDE_EXPLAIN_URL;
-  if (!url) return results; // mock explanations are already inlined by runScan
-  log("explain:real", { url, paths: results.vulnerablePaths.length });
-  for (const vp of results.vulnerablePaths) {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` }, body: JSON.stringify({ path: vp.path, severity: vp.severity, graph }) });
-    if (!r.ok) throw new Error(`RocketRide /explain ${r.status}: ${await r.text()}`);
-    const data = await r.json();
-    vp.explanation = data.explanation ?? vp.explanation;
+  const descById = {};
+  for (const t of (config.tools || [])) descById[t.name] = t.description || "";
+  if (url) {
+    log("explain:real", { url, paths: results.vulnerablePaths.length });
+    for (const vp of results.vulnerablePaths) {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` }, body: JSON.stringify({ path: vp.path, severity: vp.severity, graph }) });
+      if (!r.ok) throw new Error(`RocketRide /explain ${r.status}: ${await r.text()}`);
+      const data = await r.json();
+      vp.explanation = data.explanation ?? vp.explanation;
+    }
+    if (results.recommendedFix) {
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` }, body: JSON.stringify({ recommendedFix: results.recommendedFix, graph }) });
+        if (r.ok) { const d = await r.json(); results.recommendedFix.rationale = d.rationale ?? results.recommendedFix.rationale; }
+      } catch (_e) {}
+    }
+    return results;
   }
-  if (results.recommendedFix) {
-    try {
-      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` }, body: JSON.stringify({ recommendedFix: results.recommendedFix, graph }) });
-      if (r.ok) { const d = await r.json(); results.recommendedFix.rationale = d.rationale ?? results.recommendedFix.rationale; }
-    } catch (_e) {}
+  // Template fill (no /explain URL). Load-bearing once SCAN_URL is set: the real
+  // engine returns explanation/rationale empty by contract, so fill any blanks
+  // here just like scan.ts does. Non-empty values (e.g. from the in-process mock
+  // runScan) are preserved.
+  log("explain:mock", { paths: results.vulnerablePaths.length });
+  for (const vp of results.vulnerablePaths) {
+    if (vp.explanation) continue;
+    const s = vp.path[0];
+    const k = vp.path[vp.path.length - 1];
+    vp.explanation = `Untrusted data from "${s}" (${descById[s] || "external input"}) flows through the agent's shared context into "${k}" (${descById[k] || "privileged action"}) with no guard in between. A prompt injection planted in the "${s}" input can coerce the agent into calling "${k}", triggering a ${vp.severity}-severity action the user never intended.`;
+  }
+  if (results.recommendedFix && !results.recommendedFix.rationale) {
+    const rf = results.recommendedFix;
+    rf.rationale = `Placing a ${rf.guard} check at "${rf.placement}" forces explicit approval before the most dangerous action, eliminating ${rf.pathsEliminated} of ${rf.pathsTotal} vulnerable paths with a single guard.`;
   }
   return results;
 }
