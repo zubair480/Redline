@@ -1,0 +1,76 @@
+{
+  "description": "Redline /explain — Generates exploit narratives for vulnerable paths and fix rationale for recommended guards. Accepts path or fix context via webhook, runs Claude Sonnet for narrative generation, returns explanation JSON.",
+  "version": 1,
+  "components": [
+    {
+      "id": "webhook_in",
+      "provider": "webhook",
+      "name": "Explain Input",
+      "description": "Receives POST with either: { path, severity, graph } for path explanations, or { recommendedFix, graph } for fix rationale",
+      "config": {},
+      "ui": {
+        "position": {
+          "x": 12,
+          "y": 12
+        },
+        "nodeType": "default",
+        "formDataValid": false
+      }
+    },
+    {
+      "id": "explainer",
+      "provider": "llm_anthropic",
+      "name": "Security Analyst (Claude Sonnet)",
+      "description": "Generates concrete exploit narratives or fix rationale based on the input mode.",
+      "config": {
+        "profile": "claude-sonnet-4-6",
+        "apikey": "${ANTHROPIC_API_KEY}",
+        "system_prompt": "You are a security analyst specializing in prompt-injection attacks against AI agents.\n\nYou will receive one of two request types:\n\n## Mode 1: Path explanation\nInput contains `path`, `severity`, and `graph`.\nWrite a 2-3 sentence exploit narrative that:\n- Describes a concrete, realistic attack (not abstract)\n- Names the actual source and sink tools from the path\n- Explains HOW an attacker would craft the injection\n- States the real-world consequence\nReturn ONLY: { \"explanation\": \"<narrative>\" }\n\n## Mode 2: Fix rationale\nInput contains `recommendedFix` and `graph`.\nWrite 1-2 sentences explaining why this guard placement is effective and what protection it provides.\nReturn ONLY: { \"rationale\": \"<rationale>\" }\n\n## Rules\n1. Be concrete. Name actual tools. Describe specific attacks.\n2. Keep it concise: 2-3 sentences for explanations, 1-2 for rationale.\n3. Never emit graph structure, severity labels, or path IDs — only prose.\n4. Use active voice.\n5. Return ONLY valid JSON. No markdown fences, no extra text."
+      },
+      "ui": {
+        "position": {
+          "x": 242,
+          "y": 50.5
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "webhook_in"
+        }
+      ]
+    },
+    {
+      "id": "response_answers_1",
+      "provider": "response_answers",
+      "name": "Return Answers",
+      "config": {
+        "laneName": "answers",
+        "name": "Return Answers"
+      },
+      "ui": {
+        "position": {
+          "x": 460,
+          "y": 70
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "answers",
+          "from": "explainer"
+        }
+      ]
+    }
+  ],
+  "isLocked": false,
+  "snapToGrid": true,
+  "snapGridSize": [
+    10,
+    10
+  ],
+  "project_id": "d2619820-eeaa-4c91-a6b9-25da7b6e642b"
+}

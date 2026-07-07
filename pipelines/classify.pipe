@@ -1,0 +1,77 @@
+{
+  "description": "Redline /classify — Classifies AI agent tools into security roles (source, sink, guard, passthrough) and infers data-flow edges. Accepts a Config JSON via webhook, runs Claude Haiku for classification, returns a Graph JSON.",
+  "version": 1,
+  "components": [
+    {
+      "id": "webhook_in",
+      "provider": "webhook",
+      "name": "Classify Input",
+      "description": "Receives POST with agent Config JSON: { agent, tools: [{name, description}], guards }",
+      "config": {},
+      "ui": {
+        "position": {
+          "x": 12,
+          "y": 12
+        },
+        "nodeType": "default",
+        "formDataValid": false
+      }
+    },
+    {
+      "id": "classifier",
+      "provider": "llm_anthropic",
+      "name": "Tool Classifier (Claude Haiku)",
+      "description": "Classifies each tool as source/sink/guard/passthrough, sets privileged flag, writes rationale, infers edges. Returns structured Graph JSON.",
+      "config": {
+        "profile": "claude-haiku-4-5",
+        "apikey": "${ANTHROPIC_API_KEY}",
+        "system_prompt": "You are a security classifier for AI agent tools. Given a list of tools (each with a name and description), classify each tool's role in the agent's data flow and infer edges between them.\n\n## Roles\n\n- **source**: Ingests untrusted external data (emails, URLs, webhooks, uploads). Entry points for prompt injection. Set `privileged: false`.\n- **sink**: Performs a privileged, potentially irreversible action (refunds, sending emails, deleting records). Set `privileged: true`.\n- **guard**: Safety check or approval gate (human approval, input validation, moderation). Set `privileged: false`.\n- **passthrough**: Internal operations with no direct security impact (searching records, formatting). Set `privileged: false`.\n\n## Rules\n\n1. Write a one-sentence `rationale` for each tool explaining WHY it has that role.\n2. For every source-sink pair, create an edge with `\"via\": \"context\"`.\n3. If a guard exists, route edges through it (source -> guard, guard -> sink without `via`).\n4. Normalize guard strings to `{ \"name\": \"<string>\", \"placement\": null }`.\n\n## Output\n\nReturn ONLY valid JSON (no markdown, no explanation):\n```json\n{\n  \"nodes\": [{ \"id\": \"<tool_name>\", \"role\": \"source|sink|guard|passthrough\", \"privileged\": true|false, \"rationale\": \"<one sentence>\" }],\n  \"edges\": [{ \"from\": \"<id>\", \"via\": \"context\", \"to\": \"<id>\" }],\n  \"guards\": [{ \"name\": \"<name>\", \"placement\": \"<sink>|*|null\" }]\n}\n```"
+      },
+      "ui": {
+        "position": {
+          "x": 242,
+          "y": 50.5
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "webhook_in"
+        }
+      ]
+    },
+    {
+      "id": "response_answers_1",
+      "provider": "response_answers",
+      "name": "Return Answers",
+      "config": {
+        "laneName": "answers",
+        "name": "Return Answers"
+      },
+      "ui": {
+        "position": {
+          "x": 460,
+          "y": 70
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "answers",
+          "from": "classifier"
+        }
+      ]
+    }
+  ],
+  "isLocked": false,
+  "snapToGrid": true,
+  "snapGridSize": [
+    10,
+    10
+  ],
+  "docRevision": 8,
+  "project_id": "a3fc83d7-75f3-4ca2-8df8-89a303d1461a"
+}

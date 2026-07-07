@@ -151,11 +151,12 @@ async function explain(results, graph, config, env, log) {
   const descById = {};
   for (const t of (config.tools || [])) descById[t.name] = t.description || "";
   if (url) {
+    const explainKey = env.ROCKETRIDE_EXPLAIN_API_KEY || env.ROCKETRIDE_API_KEY || "";
     log("explain:real", { url, paths: results.vulnerablePaths.length });
     for (const vp of results.vulnerablePaths) {
       const r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${explainKey}` },
         body: JSON.stringify({ path: vp.path, severity: vp.severity, graph }),
       });
       if (!r.ok) throw new Error(`RocketRide /explain ${r.status}: ${await r.text()}`);
@@ -168,7 +169,7 @@ async function explain(results, graph, config, env, log) {
       try {
         const r = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${env.ROCKETRIDE_API_KEY || ""}` },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${explainKey}` },
           body: JSON.stringify({ recommendedFix: results.recommendedFix, graph }),
         });
         if (r.ok) { const d = await r.json(); results.recommendedFix.rationale = d.rationale ?? results.recommendedFix.rationale; }
