@@ -112,6 +112,23 @@ before/after can never diverge from the original scan.
 - **Free-scan count is per-user** (`count(*) ... WHERE kind='scan' AND user_id=$1`).
   A fresh signup always gets its 1 free scan.
 
+## Running the demo
+
+One command brings the whole stack up fresh and warm:
+
+```
+npm run demo        # restart engine + frontend, reuse the tunnel, pre-warm the LLM cache
+npm run demo:down   # stop engine + frontend (tunnel stays up; --tunnel to kill it)
+```
+
+`npm run demo` restarts the engine (`:3000`) and frontend (`:5173`), **reuses**
+the running cloudflared tunnel so its URL never changes (Butterbase stays
+wired), then runs `npm run prewarm` so the first scan of every preset is
+sub-second instead of ~20s cold. It prints a status board and, if it had to
+start a new tunnel, the exact `ROCKETRIDE_*` / `SCAN_URL` values to re-point.
+Logs land in `logs/`. Before presenting, open the frontend in an incognito
+window (or clear `localStorage`) for a clean demo user with empty history.
+
 ## Frontend (`frontend/`)
 
 React 19 + Vite + Tailwind. The AI Studio visuals are kept intact but every

@@ -8,7 +8,9 @@
     "start": "node src/engine/server.js",
     "test": "node test/run-samples.js",
     "prewarm": "node scripts/prewarm.js",
-    "check:connect": "node scripts/check-connection.js"
+    "check:connect": "node scripts/check-connection.js",
+    "demo": "bash scripts/demo-up.sh",
+    "demo:down": "bash scripts/demo-down.sh"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

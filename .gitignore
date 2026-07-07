@@ -12,3 +12,7 @@ node_modules/
 # Logs
 *.log
 .rocketride/
+
+# Demo runtime state
+logs/
+.demo-tunnel-url
