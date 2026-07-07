@@ -174,20 +174,33 @@ export default function App() {
     }
   };
 
+  const renderScanResult = async (resp: ScanResponse) => {
+    const row = await fetchScanRow(resp.scanId);
+    const view = row?.graph ? resultsToView(row.graph, resp) : deriveView(lastConfig.current, resp);
+    setScanId(resp.scanId);
+    setVulnView({ results: resp, nodes: view.nodes, edges: view.edges });
+    setSelectedNode(null);
+    setStep('vulnerable');
+    refreshHistory();
+  };
+
   const handleScanFinished = async () => {
     try {
       const resp = await scanPromise.current!;
-      const row = await fetchScanRow(resp.scanId);
-      const view = row?.graph ? resultsToView(row.graph, resp) : deriveView(lastConfig.current, resp);
-      setScanId(resp.scanId);
-      setVulnView({ results: resp, nodes: view.nodes, edges: view.edges });
-      setSelectedNode(null);
-      setStep('vulnerable');
-      refreshHistory();
+      await renderScanResult(resp);
     } catch (err: any) {
+      // Paywall is disabled for the demo: if the backend still enforces its
+      // free-scan limit, silently unlock and retry once so the user never sees
+      // a paywall. Any other failure surfaces as before.
       if (err instanceof PaywallError) {
-        setStep('config');
-        setIsPaywallOpen(true);
+        try {
+          await billingUnlock();
+          await renderScanResult(await runScan(lastConfig.current));
+          return;
+        } catch (retryErr: any) {
+          setScanError(retryErr?.message || 'Scan failed.');
+          setStep('config');
+        }
       } else {
         setScanError(err?.message || 'Scan failed.');
         setStep('config');
@@ -361,29 +374,6 @@ export default function App() {
                       );
                     })}
                   </div>
-                  <div className="bg-slate-900/50 px-4 py-2.5 border-t border-slate-800 text-center">
-                    <button 
-                      onClick={() => { setIsHistoryOpen(false); setIsPaywallOpen(true); }}
-                      className="text-[10px] font-mono text-red-400 hover:text-red-300 hover:underline"
-                    >
-                      Export Full JSON Log Audit
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Scanning Badges */}
-            <div className="flex items-center">
-              {isPro ? (
-                <div className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-950 to-indigo-950 border border-emerald-500/30 text-emerald-300 text-xs font-mono flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
-                  <Sparkles className="w-3 h-3 text-emerald-400 animate-spin" />
-                  <span>Unlimited Pro Active</span>
-                </div>
-              ) : (
-                <div className="px-3 py-1.5 rounded-lg bg-red-950/30 border border-red-900/50 text-red-400 text-xs font-mono flex items-center gap-1.5">
-                  <Lock className="w-3 h-3" />
-                  <span>1/1 Free Scans Used</span>
                 </div>
               )}
             </div>
@@ -1055,13 +1045,6 @@ export default function App() {
                         <Check className="w-3.5 h-3.5 bg-emerald-950 border border-emerald-900 rounded-full p-0.5" />
                         <span>Continuous Scan Shield Active</span>
                       </div>
-                      <button
-                        onClick={() => setIsPaywallOpen(true)}
-                        className="w-full py-3 px-4 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-slate-50 font-bold text-xs font-mono uppercase tracking-widest rounded-xl transition-all shadow-[0_4px_25px_rgba(239,68,68,0.2)] flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Zap className="w-4 h-4 text-yellow-300 animate-pulse" />
-                        <span>Unlock Redline Pro</span>
-                      </button>
                     </div>
                   )}
 
