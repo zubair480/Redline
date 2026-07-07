@@ -36,7 +36,40 @@ const SHOPIFY_BOT_CONFIG = `{
   "guards": ["human_approval"]
 }`;
 
-// Editable template configs shown as quick-start chips.
+const DEVOPS_DEPLOY_CONFIG = `{
+  "agent": "cicd-deploy-agent",
+  "tools": [
+    { "name": "read_pr_comment", "description": "Read comments posted on a pull request by any external GitHub user" },
+    { "name": "fetch_build_log", "description": "Fetch a build log from a contributor-supplied CI URL" },
+    { "name": "run_shell", "description": "Execute an arbitrary shell command on the deploy runner" },
+    { "name": "deploy_production", "description": "Deploy the current build to the production Kubernetes cluster" }
+  ],
+  "guards": []
+}`;
+
+const FINTECH_TREASURY_CONFIG = `{
+  "agent": "treasury-ops-agent",
+  "tools": [
+    { "name": "read_invoice_email", "description": "Read incoming vendor invoice emails from an external inbox" },
+    { "name": "wire_transfer", "description": "Send a wire transfer to a supplier bank account" },
+    { "name": "send_notification", "description": "Send an email notification to the finance team" }
+  ],
+  "guards": [{ "guard": "human_approval", "placement": "wire_transfer" }]
+}`;
+
+const HEALTHCARE_INTAKE_CONFIG = `{
+  "agent": "patient-intake-agent",
+  "tools": [
+    { "name": "read_patient_message", "description": "Read an incoming patient message from the portal" },
+    { "name": "lookup_record", "description": "Look up an internal patient record by id" },
+    { "name": "send_prescription", "description": "Submit a prescription order to the pharmacy system" },
+    { "name": "clinician_review", "description": "Require a licensed clinician to review and approve before any prescription is submitted" }
+  ],
+  "guards": ["clinician_review"]
+}`;
+
+// Editable template configs shown as quick-start chips. Ordered as a spectrum:
+// wide-open -> partially guarded -> fully clean, across varied domains.
 export const PRESETS = [
   {
     name: 'Customer Support Agent (Refund Sink)',
@@ -47,6 +80,21 @@ export const PRESETS = [
     name: 'Slack Copilot (SQL Sink)',
     desc: 'Reads external mentions and links, then runs raw SQL against production. Fully unguarded.',
     config: SLACK_COPILOT_CONFIG,
+  },
+  {
+    name: 'CI/CD Deploy Bot (RCE)',
+    desc: 'PR comments and CI logs flow into arbitrary shell execution and a production deploy. No guard.',
+    config: DEVOPS_DEPLOY_CONFIG,
+  },
+  {
+    name: 'Fintech Treasury (Partial Guard)',
+    desc: 'Approval gates the wire transfer, but the notification sink is still hijackable. Shows partial coverage.',
+    config: FINTECH_TREASURY_CONFIG,
+  },
+  {
+    name: 'Healthcare Intake (Guarded)',
+    desc: 'Patient messages reach a prescription sink, gated behind mandatory clinician review. Scans clean.',
+    config: HEALTHCARE_INTAKE_CONFIG,
   },
   {
     name: 'Shopify Bot (Guarded)',

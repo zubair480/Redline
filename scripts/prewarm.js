@@ -46,6 +46,44 @@ const PRESETS = [
     },
   },
   {
+    name: 'CI/CD Deploy Bot (RCE)',
+    config: {
+      agent: 'cicd-deploy-agent',
+      tools: [
+        { name: 'read_pr_comment', description: 'Read comments posted on a pull request by any external GitHub user' },
+        { name: 'fetch_build_log', description: 'Fetch a build log from a contributor-supplied CI URL' },
+        { name: 'run_shell', description: 'Execute an arbitrary shell command on the deploy runner' },
+        { name: 'deploy_production', description: 'Deploy the current build to the production Kubernetes cluster' },
+      ],
+      guards: [],
+    },
+  },
+  {
+    name: 'Fintech Treasury (Partial Guard)',
+    config: {
+      agent: 'treasury-ops-agent',
+      tools: [
+        { name: 'read_invoice_email', description: 'Read incoming vendor invoice emails from an external inbox' },
+        { name: 'wire_transfer', description: 'Send a wire transfer to a supplier bank account' },
+        { name: 'send_notification', description: 'Send an email notification to the finance team' },
+      ],
+      guards: [{ guard: 'human_approval', placement: 'wire_transfer' }],
+    },
+  },
+  {
+    name: 'Healthcare Intake (Guarded)',
+    config: {
+      agent: 'patient-intake-agent',
+      tools: [
+        { name: 'read_patient_message', description: 'Read an incoming patient message from the portal' },
+        { name: 'lookup_record', description: 'Look up an internal patient record by id' },
+        { name: 'send_prescription', description: 'Submit a prescription order to the pharmacy system' },
+        { name: 'clinician_review', description: 'Require a licensed clinician to review and approve before any prescription is submitted' },
+      ],
+      guards: ['clinician_review'],
+    },
+  },
+  {
     name: 'Shopify Bot (Guarded)',
     config: {
       agent: 'shopify-fulfillment-bot',
