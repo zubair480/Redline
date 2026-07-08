@@ -52,7 +52,7 @@ const FINTECH_TREASURY_CONFIG = `{
   "tools": [
     { "name": "read_invoice_email", "description": "Read incoming vendor invoice emails from an external inbox" },
     { "name": "wire_transfer", "description": "Send a wire transfer to a supplier bank account" },
-    { "name": "send_notification", "description": "Send an email notification to the finance team" }
+    { "name": "email_vendor", "description": "Send an email to an external vendor address" }
   ],
   "guards": [{ "guard": "human_approval", "placement": "wire_transfer" }]
 }`;
@@ -88,7 +88,7 @@ export const PRESETS = [
   },
   {
     name: 'Fintech Treasury (Partial Guard)',
-    desc: 'Approval gates the wire transfer, but the notification sink is still hijackable. Shows partial coverage.',
+    desc: 'Approval gates the wire transfer, but the outbound email sink is still hijackable. Shows partial coverage.',
     config: FINTECH_TREASURY_CONFIG,
   },
   {
