@@ -6,58 +6,102 @@
 //            { recommendedFix, graph }      -> { rationale, remediation }
 //
 // Shapes match the mock in functions/scan.ts field-for-field (spec 07), so the
-// orchestrator swaps to these endpoints with env vars only. Every LLM call has
-// a deterministic heuristic fallback: if the API key is missing or the call
+// orchestrator swaps to these endpoints with env vars only. Every pipeline call
+// has a deterministic heuristic fallback: if the SDK is unavailable or the call
 // fails, we return the same output the mock would — the pipeline never breaks.
+//
+// Transport: RocketRide Cloud speaks DAP-over-WebSocket (not plain HTTP), so we
+// use the rocketride SDK. The pipelines are booted once at startup and their
+// tokens are reused for every request.
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
-const CLASSIFY_MODEL = process.env.ROCKETRIDE_CLASSIFY_MODEL || 'claude-sonnet-5'
-const EXPLAIN_MODEL = process.env.ROCKETRIDE_EXPLAIN_MODEL || 'claude-haiku-4-5-20251001'
-const LLM_TIMEOUT_MS = 30000
+import { RocketRideClient, Question } from 'rocketride'
 
-// ------------------------- LLM plumbing -------------------------
+const ROCKETRIDE_URI = process.env.ROCKETRIDE_URI || 'https://api.rocketride.ai'
+const ROCKETRIDE_AUTH = process.env.ROCKETRIDE_AUTH || process.env.ROCKETRIDE_API_KEY || ''
 
-async function complete(model, system, user, maxTokens) {
-  const key = process.env.ANTHROPIC_API_KEY
-  if (!key) throw new Error('ANTHROPIC_API_KEY not set')
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS)
+// Pipeline file paths (relative to cwd — the repo root)
+const CLASSIFY_PIPE = 'pipelines/classify.pipe'
+const EXPLAIN_PIPE = 'pipelines/explain.pipe'
+
+// ---- SDK client + pipeline boot (singleton, lazy) ----
+
+let _client = null
+let _classifyToken = null
+let _explainToken = null
+let _bootPromise = null
+
+async function usePipeline(filepath, source) {
+  const opts = { filepath, useExisting: true }
+  if (source) opts.source = source
   try {
-    const r = await fetch(ANTHROPIC_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: 'user', content: user }],
-      }),
-      signal: controller.signal,
-    })
-    if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`)
-    const data = await r.json()
-    return data.content?.[0]?.text ?? ''
-  } finally {
-    clearTimeout(timer)
+    return (await _client.use(opts)).token
+  } catch (_) {
+    // First run — no existing pipeline yet
+    const opts2 = { filepath }
+    if (source) opts2.source = source
+    return (await _client.use(opts2)).token
   }
 }
 
-// The model is told to answer with bare JSON, but strip fences defensively.
+async function boot() {
+  if (_bootPromise) return _bootPromise
+  _bootPromise = (async () => {
+    try {
+      _client = new RocketRideClient({ uri: ROCKETRIDE_URI, auth: ROCKETRIDE_AUTH })
+      await _client.connect()
+
+      _classifyToken = await usePipeline(CLASSIFY_PIPE)
+      console.log('[rocketride:boot] classify pipeline ready, token:', _classifyToken)
+
+      _explainToken = await usePipeline(EXPLAIN_PIPE)
+      console.log('[rocketride:boot] explain pipeline ready, token:', _explainToken)
+    } catch (err) {
+      console.error('[rocketride:boot] SDK init failed, will use heuristic fallback:', err.message)
+      _client = null
+      _classifyToken = null
+      _explainToken = null
+    }
+  })()
+  return _bootPromise
+}
+
+// Boot eagerly on import so the first request doesn't wait.
+boot()
+
+// ---- JSON extraction ----
+
 function extractJson(text) {
   let t = (text || '').trim()
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fence) t = fence[1].trim()
   const start = Math.min(...['{', '['].map((c) => { const i = t.indexOf(c); return i === -1 ? Infinity : i }))
-  if (start === Infinity) throw new Error('no JSON in LLM response')
+  if (start === Infinity) throw new Error('no JSON in pipeline response')
   return JSON.parse(t.slice(start))
 }
 
-// Cache by exact input: repeat demo scans skip the LLM entirely and always
-// show the same prose.
+// Extract the best JSON answer from a pipeline response. The answers array may
+// contain multiple elements (e.g. a summary object + the raw LLM JSON). We try
+// each answer looking for one that parses into the expected shape.
+function extractAnswer(response) {
+  const answers = response && response.answers ? response.answers : []
+  // Try each answer, preferring later ones (the LLM output tends to be last)
+  for (let i = answers.length - 1; i >= 0; i--) {
+    const a = answers[i]
+    try {
+      if (typeof a === 'object' && a !== null && (a.nodes || a.explanation || a.rationale)) return a
+      if (typeof a === 'string') return extractJson(a)
+    } catch (_) { /* try next */ }
+  }
+  // Fallback: try the first answer raw
+  if (answers.length > 0) {
+    const a = answers[0]
+    if (typeof a === 'object') return a
+    return extractJson(a)
+  }
+  throw new Error('no answers in pipeline response')
+}
+
+// Cache by exact input: repeat demo scans skip the pipeline entirely.
 const cache = new Map()
 const CACHE_MAX = 100
 function cached(key, compute) {
@@ -68,7 +112,7 @@ function cached(key, compute) {
   return p
 }
 
-// ------------------------- heuristic fallback (mirrors the orchestrator mock) -------------------------
+// ---- heuristic fallback (mirrors the orchestrator mock) ----
 
 const GUARD_KW = ['approv', 'verify', 'confirm', 'human', 'review', 'sanitiz',
   'moderat', 'allowlist', 'whitelist', 'guard', 'permission check', 'validate input']
@@ -106,94 +150,97 @@ function normalizeGuards(guards) {
   })
 }
 
-// ------------------------- /classify -------------------------
+// ---- /classify via RocketRide SDK ----
 
 const ROLES = new Set(['source', 'sink', 'guard', 'passthrough'])
 
-const CLASSIFY_SYSTEM = `You are a security classifier for AI agent tools. For each tool, assign exactly one role:
-- "source": ingests data an attacker could influence (emails, URLs, webhooks, user messages, scraped content)
-- "sink": takes a privileged or irreversible action (payments, sending messages, deleting, executing, deploying)
-- "guard": a safety check that gates other actions (human approval, verification, sanitization)
-- "passthrough": internal, read-only, or low-risk operations
+async function sdkClassifyTools(tools) {
+  await boot()
+  if (!_client || !_classifyToken) throw new Error('SDK not available')
 
-Mark sinks "privileged": true (others false). Write a "rationale": one concrete sentence tied to the tool's description explaining the classification from a prompt-injection standpoint.
+  // classify.pipe uses a chat source — use client.chat() with a Question
+  const question = new Question({ expectJson: true })
+  question.addQuestion(
+    `Classify these AI agent tools into security roles (source/sink/guard/passthrough) and return the Graph JSON.\n\nTools:\n${JSON.stringify(tools, null, 2)}`
+  )
 
-Respond with ONLY a JSON array, one object per tool, in the same order:
-[{ "name": "...", "role": "...", "privileged": true|false, "rationale": "..." }]`
+  const response = await _client.chat({ token: _classifyToken, question })
+  const parsed = extractAnswer(response)
 
-async function llmClassifyTools(tools) {
-  const user = `Agent tools to classify:\n${JSON.stringify(tools, null, 2)}`
-  const raw = await complete(CLASSIFY_MODEL, CLASSIFY_SYSTEM, user, 220 * tools.length + 200)
-  const parsed = extractJson(raw)
-  if (!Array.isArray(parsed)) throw new Error('classify: expected a JSON array')
-  const byName = {}
-  for (const e of parsed) if (e && typeof e.name === 'string') byName[e.name] = e
-  // Per-tool validation: any entry the LLM fumbled falls back to the heuristic.
-  return tools.map((t) => {
-    const e = byName[t.name]
-    if (!e || !ROLES.has(e.role)) {
-      const { role, privileged } = heuristicRole(t.description)
-      return { id: t.name, role, privileged, rationale: heuristicRationale(role, t.description) }
-    }
-    return {
-      id: t.name,
-      role: e.role,
-      privileged: e.role === 'sink' ? e.privileged !== false : e.privileged === true,
-      rationale: typeof e.rationale === 'string' && e.rationale ? e.rationale : heuristicRationale(e.role, t.description),
-    }
-  })
+  // If the pipeline returned a full Graph, use it directly
+  if (parsed.nodes && Array.isArray(parsed.nodes)) return parsed
+
+  // Otherwise treat as an array of per-tool classifications
+  if (!Array.isArray(parsed)) throw new Error('classify: expected JSON array or Graph')
+  return parsed
 }
 
 export async function classify(config) {
   const tools = Array.isArray(config.tools) ? config.tools : []
-  let nodes
+  let result
   try {
-    nodes = await cached('classify:' + JSON.stringify(tools), () => llmClassifyTools(tools))
-    console.log('[classify:llm]', { model: CLASSIFY_MODEL, tools: tools.length })
+    result = await cached('classify:' + JSON.stringify(tools), async () => {
+      const raw = await sdkClassifyTools(tools)
+
+      // If we got a full Graph back (nodes, edges, guards), return it
+      if (raw.nodes && Array.isArray(raw.nodes)) {
+        console.log('[classify:rocketride]', { tools: tools.length })
+        return raw
+      }
+
+      // Otherwise raw is a per-tool array — build the graph
+      const byName = {}
+      for (const e of raw) if (e && typeof e.name === 'string') byName[e.name] = e
+      const nodes = tools.map((t) => {
+        const e = byName[t.name]
+        if (!e || !ROLES.has(e.role)) {
+          const { role, privileged } = heuristicRole(t.description)
+          return { id: t.name, role, privileged, rationale: heuristicRationale(role, t.description) }
+        }
+        return {
+          id: t.name,
+          role: e.role,
+          privileged: e.role === 'sink' ? e.privileged !== false : e.privileged === true,
+          rationale: typeof e.rationale === 'string' && e.rationale ? e.rationale : heuristicRationale(e.role, t.description),
+        }
+      })
+      console.log('[classify:rocketride]', { tools: tools.length })
+      return { nodes }
+    })
   } catch (err) {
     console.error('[classify:fallback]', err.message)
-    nodes = tools.map((t) => {
+    const nodes = tools.map((t) => {
       const { role, privileged } = heuristicRole(t.description)
       return { id: t.name, role, privileged, rationale: heuristicRationale(role, t.description) }
     })
+    result = { nodes }
   }
-  // Shared-context assumption (spec 01): every source can steer every sink
-  // through the agent's context window.
-  const edges = []
-  for (const s of nodes.filter((n) => n.role === 'source')) {
-    for (const k of nodes.filter((n) => n.role === 'sink')) {
-      edges.push({ from: s.id, via: 'context', to: k.id })
+
+  // Ensure edges and guards exist
+  const nodes = result.nodes
+  const edges = result.edges || []
+  if (edges.length === 0) {
+    for (const s of nodes.filter((n) => n.role === 'source')) {
+      for (const k of nodes.filter((n) => n.role === 'sink')) {
+        edges.push({ from: s.id, via: 'context', to: k.id })
+      }
     }
   }
-  return { nodes, edges, guards: normalizeGuards(config.guards) }
+  return { nodes, edges, guards: result.guards || normalizeGuards(config.guards) }
 }
 
-// ------------------------- /explain -------------------------
+// ---- /explain via RocketRide SDK ----
 
-function pathContext(graph, ids) {
-  const byId = {}
-  for (const n of graph?.nodes || []) byId[n.id] = n
-  return ids
-    .filter((id) => id !== 'context')
-    .map((id) => `- ${id}: ${byId[id]?.rationale || byId[id]?.role || 'tool'}`)
-    .join('\n')
-}
+async function sdkExplain(body) {
+  await boot()
+  if (!_client || !_explainToken) throw new Error('SDK not available')
 
-const EXPLAIN_SYSTEM = `You are a security analyst explaining prompt-injection paths in AI agents to a developer.
-Respond with ONLY a JSON object: { "explanation": "...", "fix": "...", "remediation": "..." }
-- "explanation": 2-3 sentences, concrete about the attack (e.g. "a crafted email instructs the agent to...") and naming the actual source and sink tools by id.
-- "fix": one line stating the guard to add and where.
-- "remediation": a short paste-ready Python validator stub gating the sink.`
+  // explain.pipe uses a chat source — use client.chat() with a Question
+  const question = new Question({ expectJson: true })
+  question.addQuestion(JSON.stringify(body))
 
-async function llmExplainPath({ path, severity, graph }) {
-  const src = path[0]
-  const sink = path[path.length - 1]
-  const user = `Vulnerable path: ${path.join(' -> ')} (severity: ${severity})
-The "context" node is the agent's shared LLM context window.
-Tools on the path:
-${pathContext(graph, path)}
-Explain how an attacker exploits this path from "${src}" to "${sink}".`
-  return extractJson(await complete(EXPLAIN_MODEL, EXPLAIN_SYSTEM, user, 500))
+  const response = await _client.chat({ token: _explainToken, question })
+  return extractAnswer(response)
 }
 
 export async function explainPath(body) {
@@ -201,8 +248,8 @@ export async function explainPath(body) {
   const src = path[0]
   const sink = path[path.length - 1]
   try {
-    const out = await cached('explain:' + JSON.stringify([path, severity]), () => llmExplainPath(body))
-    console.log('[explain:llm]', { model: EXPLAIN_MODEL, path: path.join('->') })
+    const out = await cached('explain:' + JSON.stringify([path, severity]), () => sdkExplain(body))
+    console.log('[explain:rocketride]', { path: path.join('->') })
     return {
       explanation: out.explanation || fallbackExplanation(body),
       fix: out.fix || `Require a guard before "${sink}".`,
@@ -218,20 +265,11 @@ export async function explainPath(body) {
   }
 }
 
-const RATIONALE_SYSTEM = `You are a security analyst justifying a recommended fix for an AI agent to a developer.
-Respond with ONLY a JSON object: { "rationale": "...", "remediation": "..." }
-- "rationale": 1-2 sentences on why this guard at this placement is the optimal chokepoint, citing the paths eliminated.
-- "remediation": a short paste-ready Python validator stub implementing the guard.`
-
 export async function explainFix(body) {
   const rf = body.recommendedFix
   try {
-    const user = `Recommended fix: ${JSON.stringify(rf)}
-Graph nodes:
-${pathContext(body.graph, (body.graph?.nodes || []).map((n) => n.id))}
-Justify placing guard "${rf.guard}" at "${rf.placement}".`
-    const out = await cached('fix:' + JSON.stringify(rf), async () => extractJson(await complete(EXPLAIN_MODEL, RATIONALE_SYSTEM, user, 400)))
-    console.log('[explain-fix:llm]', { placement: rf.placement })
+    const out = await cached('fix:' + JSON.stringify(rf), () => sdkExplain(body))
+    console.log('[explain-fix:rocketride]', { placement: rf.placement })
     return {
       rationale: out.rationale || fallbackRationale(rf),
       remediation: out.remediation || fallbackRemediation(rf.placement),

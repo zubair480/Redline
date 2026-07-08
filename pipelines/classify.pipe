@@ -3,21 +3,6 @@
   "version": 1,
   "components": [
     {
-      "id": "webhook_in",
-      "provider": "webhook",
-      "name": "Classify Input",
-      "description": "Receives POST with agent Config JSON: { agent, tools: [{name, description}], guards }",
-      "config": {},
-      "ui": {
-        "position": {
-          "x": 12,
-          "y": 12
-        },
-        "nodeType": "default",
-        "formDataValid": false
-      }
-    },
-    {
       "id": "classifier",
       "provider": "llm_anthropic",
       "name": "Tool Classifier (Claude Haiku)",
@@ -25,7 +10,13 @@
       "config": {
         "profile": "claude-haiku-4-5",
         "apikey": "${ANTHROPIC_API_KEY}",
-        "system_prompt": "You are a security classifier for AI agent tools. Given a list of tools (each with a name and description), classify each tool's role in the agent's data flow and infer edges between them.\n\n## Roles\n\n- **source**: Ingests untrusted external data (emails, URLs, webhooks, uploads). Entry points for prompt injection. Set `privileged: false`.\n- **sink**: Performs a privileged, potentially irreversible action (refunds, sending emails, deleting records). Set `privileged: true`.\n- **guard**: Safety check or approval gate (human approval, input validation, moderation). Set `privileged: false`.\n- **passthrough**: Internal operations with no direct security impact (searching records, formatting). Set `privileged: false`.\n\n## Rules\n\n1. Write a one-sentence `rationale` for each tool explaining WHY it has that role.\n2. For every source-sink pair, create an edge with `\"via\": \"context\"`.\n3. If a guard exists, route edges through it (source -> guard, guard -> sink without `via`).\n4. Normalize guard strings to `{ \"name\": \"<string>\", \"placement\": null }`.\n\n## Output\n\nReturn ONLY valid JSON (no markdown, no explanation):\n```json\n{\n  \"nodes\": [{ \"id\": \"<tool_name>\", \"role\": \"source|sink|guard|passthrough\", \"privileged\": true|false, \"rationale\": \"<one sentence>\" }],\n  \"edges\": [{ \"from\": \"<id>\", \"via\": \"context\", \"to\": \"<id>\" }],\n  \"guards\": [{ \"name\": \"<name>\", \"placement\": \"<sink>|*|null\" }]\n}\n```"
+        "system_prompt": "You are a security classifier for AI agent tools. Given a list of tools (each with a name and description), classify each tool's role in the agent's data flow and infer edges between them.\n\n## Roles\n\n- **source**: Ingests untrusted external data (emails, URLs, webhooks, uploads). Entry points for prompt injection. Set `privileged: false`.\n- **sink**: Performs a privileged, potentially irreversible action (refunds, sending emails, deleting records). Set `privileged: true`.\n- **guard**: Safety check or approval gate (human approval, input validation, moderation). Set `privileged: false`.\n- **passthrough**: Internal operations with no direct security impact (searching records, formatting). Set `privileged: false`.\n\n## Rules\n\n1. Write a one-sentence `rationale` for each tool explaining WHY it has that role.\n2. For every source-sink pair, create an edge with `\"via\": \"context\"`.\n3. If a guard exists, route edges through it (source -> guard, guard -> sink without `via`).\n4. Normalize guard strings to `{ \"name\": \"<string>\", \"placement\": null }`.\n\n## Output\n\nReturn ONLY valid JSON (no markdown, no explanation):\n```json\n{\n  \"nodes\": [{ \"id\": \"<tool_name>\", \"role\": \"source|sink|guard|passthrough\", \"privileged\": true|false, \"rationale\": \"<one sentence>\" }],\n  \"edges\": [{ \"from\": \"<id>\", \"via\": \"context\", \"to\": \"<id>\" }],\n  \"guards\": [{ \"name\": \"<name>\", \"placement\": \"<sink>|*|null\" }]\n}\n```",
+        "claude-haiku-4-5": {
+          "apikey": "${ROCKETRIDE_ANTHROPIC_KEY}"
+        },
+        "parameters": {
+          "google": {}
+        }
       },
       "ui": {
         "position": {
@@ -38,7 +29,7 @@
       "input": [
         {
           "lane": "questions",
-          "from": "webhook_in"
+          "from": "prompt_1"
         }
       ]
     },
@@ -64,6 +55,54 @@
           "from": "classifier"
         }
       ]
+    },
+    {
+      "id": "chat_1",
+      "provider": "chat",
+      "name": "Chat",
+      "config": {
+        "hideForm": true,
+        "mode": "Source",
+        "parameters": {},
+        "type": "chat",
+        "name": "Chat"
+      },
+      "ui": {
+        "position": {
+          "x": -290,
+          "y": 60
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      }
+    },
+    {
+      "id": "prompt_1",
+      "provider": "prompt",
+      "name": "Prompt",
+      "config": {
+        "instructions": [
+          "You are a security classifier for AI agent tools. Given a list of tools (each with a name and description), classify each tool's role in the agent's data flow and infer edges between them.  Roles Classify each tool into exactly one role:  source: Ingests untrusted external data (e.g., reading emails, fetching URLs, receiving webhooks, parsing uploads). These are entry points for prompt injection. sink: Performs a privileged, potentially irreversible action (e.g., issuing refunds, sending emails, deleting records, executing commands). Set privileged: true. guard: Acts as a safety check or approval gate (e.g., human approval, input validation, content moderation, allowlist checks). Set privileged: false. passthrough: Internal operations with no direct security impact (e.g., searching records, formatting data, logging). Set privileged: false. Rules A tool is a source if it reads from any channel an attacker could influence: email, URLs, webhooks, user messages, file uploads, API responses from third parties. A tool is a sink if it causes a real-world side effect that is hard to reverse: financial transactions, sending communications, modifying data, executing code, provisioning resources. A tool is a guard if its primary purpose is to check, validate, approve, moderate, or gate another action. Everything else is passthrough. For each tool, write a one-sentence rationale explaining WHY it has that role, referencing the tool's specific description. Edges Infer CAN_FLOW_INTO edges:  For every source-sink pair, create an edge with \"via\": \"context\" (data flows through the agent's shared context/prompt). If a guard exists, create edges from sources to the guard and from the guard to the sinks it protects (omit via for guard-to-sink edges). Guards Pass through any guards from the input config. Normalize strings to { \"name\": \"<string>\", \"placement\": null }. Objects keep their existing fields.  Output format Return ONLY valid JSON (no markdown, no explanation) matching this exact schema:  {   \"nodes\": [     { \"id\": \"<tool_name>\", \"role\": \"source|sink|guard|passthrough\", \"privileged\": true|false, \"rationale\": \"<one sentence>\" }   ],   \"edges\": [     { \"from\": \"<source_id>\", \"via\": \"context\", \"to\": \"<sink_id>\" }   ],   \"guards\": [     { \"name\": \"<guard_name>\", \"placement\": \"<sink_name>|*|null\" }   ] } Examples Input tools:  read_email: \"Read incoming customer emails\" issue_refund: \"Process a refund to the customer's payment method\" search_orders: \"Look up order history in the database\" Output:  {   \"nodes\": [     { \"id\": \"read_email\", \"role\": \"source\", \"privileged\": false, \"rationale\": \"Ingests untrusted external input from customer emails, which an attacker can craft.\" },     { \"id\": \"issue_refund\", \"role\": \"sink\", \"privileged\": true, \"rationale\": \"Performs an irreversible financial action by processing refunds.\" },     { \"id\": \"search_orders\", \"role\": \"passthrough\", \"privileged\": false, \"rationale\": \"Read-only database lookup with no external data ingestion or privileged side effect.\" }   ],   \"edges\": [     { \"from\": \"read_email\", \"via\": \"context\", \"to\": \"issue_refund\" }   ],   \"guards\": [] }"
+        ],
+        "name": "Prompt",
+        "parameters": {
+          "google": {}
+        }
+      },
+      "ui": {
+        "position": {
+          "x": -20,
+          "y": 40
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "chat_1"
+        }
+      ]
     }
   ],
   "isLocked": false,
@@ -72,6 +111,6 @@
     10,
     10
   ],
-  "docRevision": 8,
-  "project_id": "a3fc83d7-75f3-4ca2-8df8-89a303d1461a"
+  "docRevision": 34,
+  "project_id": "ce9f25a5-e907-487d-8ca7-ecc3671f6d7a"
 }

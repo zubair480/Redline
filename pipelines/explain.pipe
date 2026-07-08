@@ -3,18 +3,24 @@
   "version": 1,
   "components": [
     {
-      "id": "webhook_in",
-      "provider": "webhook",
+      "id": "chat_1",
+      "provider": "chat",
       "name": "Explain Input",
-      "description": "Receives POST with either: { path, severity, graph } for path explanations, or { recommendedFix, graph } for fix rationale",
-      "config": {},
+      "description": "Receives path explanation or fix rationale requests via chat",
+      "config": {
+        "hideForm": true,
+        "mode": "Source",
+        "parameters": {},
+        "type": "chat",
+        "name": "Chat"
+      },
       "ui": {
         "position": {
           "x": 12,
           "y": 12
         },
         "nodeType": "default",
-        "formDataValid": false
+        "formDataValid": true
       }
     },
     {
@@ -23,8 +29,11 @@
       "name": "Security Analyst (Claude Sonnet)",
       "description": "Generates concrete exploit narratives or fix rationale based on the input mode.",
       "config": {
-        "profile": "claude-sonnet-4-6",
+        "profile": "claude-haiku-4-5",
         "apikey": "${ANTHROPIC_API_KEY}",
+        "claude-haiku-4-5": {
+          "apikey": "${ROCKETRIDE_ANTHROPIC_KEY}"
+        },
         "system_prompt": "You are a security analyst specializing in prompt-injection attacks against AI agents.\n\nYou will receive one of two request types:\n\n## Mode 1: Path explanation\nInput contains `path`, `severity`, and `graph`.\nWrite a 2-3 sentence exploit narrative that:\n- Describes a concrete, realistic attack (not abstract)\n- Names the actual source and sink tools from the path\n- Explains HOW an attacker would craft the injection\n- States the real-world consequence\nReturn ONLY: { \"explanation\": \"<narrative>\" }\n\n## Mode 2: Fix rationale\nInput contains `recommendedFix` and `graph`.\nWrite 1-2 sentences explaining why this guard placement is effective and what protection it provides.\nReturn ONLY: { \"rationale\": \"<rationale>\" }\n\n## Rules\n1. Be concrete. Name actual tools. Describe specific attacks.\n2. Keep it concise: 2-3 sentences for explanations, 1-2 for rationale.\n3. Never emit graph structure, severity labels, or path IDs — only prose.\n4. Use active voice.\n5. Return ONLY valid JSON. No markdown fences, no extra text."
       },
       "ui": {
@@ -38,7 +47,7 @@
       "input": [
         {
           "lane": "questions",
-          "from": "webhook_in"
+          "from": "chat_1"
         }
       ]
     },
@@ -72,5 +81,5 @@
     10,
     10
   ],
-  "project_id": "d2619820-eeaa-4c91-a6b9-25da7b6e642b"
+  "project_id": "e0b3556c-41c7-47b2-95d9-91b477c396d3"
 }
