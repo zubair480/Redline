@@ -60,11 +60,20 @@ TUNNEL_URL="${TUNNEL_URL:-}"
 [ -z "$TUNNEL_URL" ] && [ -f "$STATE_FILE" ] && TUNNEL_URL="$(cat "$STATE_FILE")"
 [ -z "$TUNNEL_URL" ] && TUNNEL_URL="$DEFAULT_TUNNEL_URL"
 
-if pgrep -f "cloudflared tunnel --url http://localhost:$ENGINE_PORT" >/dev/null 2>&1; then
+# A cloudflared process can linger after its quick-tunnel URL has expired, so
+# don't trust the process alone — verify the URL actually answers.
+tunnel_alive() { [ -n "$TUNNEL_URL" ] && curl -s -o /dev/null -m 8 "$TUNNEL_URL/health"; }
+
+if pgrep -f "cloudflared tunnel --url http://localhost:$ENGINE_PORT" >/dev/null 2>&1 && tunnel_alive; then
   ok "reusing running tunnel — URL unchanged, Butterbase wiring intact"
   printf '     %s%s%s\n' "$D" "$TUNNEL_URL" "$X"
 else
-  warn "no tunnel running — starting a fresh one (its URL will be NEW)"
+  if pgrep -f "cloudflared tunnel --url http://localhost:$ENGINE_PORT" >/dev/null 2>&1; then
+    warn "a cloudflared process is running but its URL is dead — replacing it"
+    pkill -f "cloudflared tunnel --url http://localhost:$ENGINE_PORT" >/dev/null 2>&1
+    sleep 1
+  fi
+  warn "starting a fresh tunnel (its URL will be NEW — Butterbase must be re-pointed)"
   if ! command -v cloudflared >/dev/null 2>&1; then
     die "cloudflared not installed. Start your tunnel manually, then re-run."
   fi
